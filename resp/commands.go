@@ -4,15 +4,12 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"strconv"
 	"time"
 )
 
 func CollectGarbage(data *SafeMap, expq *SafePriorityQueue) {
-	if expq.Len() == 0 {
-		return
-	}
-
 	currentTime := time.Now().UnixMilli()
 	for top := expq.Peek(); top != nil && top.(PQItem).Value <= currentTime; top = expq.Peek() {
 		expq.Pop()
@@ -29,9 +26,11 @@ func ExecuteCommand(request *Array, data *SafeMap, expq *SafePriorityQueue) (str
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
 
-	command := request.Value[0].(*BulkString).Value
+	command := strings.ToUpper(request.Value[0].(*BulkString).Value)
 	switch command {
-		case "COMMAND":
+		case "CLIENT":
+			return "+OK\r\n", nil
+		case "HELLO","COMMAND":
 			return "*2\r\n$5\r\nhello\r\n*1\r\n$5\r\nworld\r\n", nil
 		case "PING":
 			return "+PONG\r\n", nil

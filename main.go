@@ -15,12 +15,14 @@ import (
 )
 
 func main() {
-	interrupt := make(chan os.Signal , 1)
+	ready := make(chan bool, 1)
+	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
-	os.Exit(run(interrupt))
+	
+	os.Exit(run(ready, interrupt))	
 }
 
-func run(interrupt <-chan os.Signal) int {
+func run(ready chan<- bool, interrupt <-chan os.Signal) int {
 	listener, err := net.Listen("tcp", ":36245")
 	if err != nil {
 		log.Println(err)
@@ -35,6 +37,8 @@ func run(interrupt <-chan os.Signal) int {
 	}()
 
 	log.Printf("Listening to %s", listener.Addr())
+
+	ready <- true
 
 	data := resp.NewSafeMap()
 	expq := resp.NewSafePriorityQueue()

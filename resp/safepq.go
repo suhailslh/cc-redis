@@ -44,8 +44,6 @@ func NewSafePriorityQueue() *SafePriorityQueue {
 	return &SafePriorityQueue{pq: PriorityQueue{}}
 }
 
-func (spq SafePriorityQueue) Len() int		{ return spq.pq.Len() }
-
 func (spq *SafePriorityQueue) Push(x any) {
 	spq.mu.Lock()
 	defer spq.mu.Unlock()
