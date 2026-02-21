@@ -40,7 +40,7 @@ func run(ready chan<- bool, interrupt <-chan os.Signal) int {
 
 	ready <- true
 
-	data := resp.NewSafeMap()
+	data := resp.NewSafeMap[string, resp.DataType]()
 	expq := resp.NewSafePriorityQueue()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -63,7 +63,7 @@ func run(ready chan<- bool, interrupt <-chan os.Signal) int {
 	return 0
 }
 
-func serve(conn net.Conn, data *resp.SafeMap, expq *resp.SafePriorityQueue) {
+func serve(conn net.Conn, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue) {
 	defer conn.Close()
 
 	request := resp.NewArray()

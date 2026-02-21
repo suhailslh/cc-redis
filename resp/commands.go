@@ -2,26 +2,24 @@ package resp
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"strconv"
 	"time"
 )
 
-func CollectGarbage(data *SafeMap, expq *SafePriorityQueue) {
+func CollectGarbage(data *SafeMap[string, DataType], expq *SafePriorityQueue) {
 	currentTime := time.Now().UnixMilli()
 	for top := expq.Peek(); top != nil && top.(PQItem).Value <= currentTime; top = expq.Peek() {
 		expq.Pop()
-		value := data.Read(top.(PQItem).Key)
-		if value != nil && value.(*BulkString).ExpiresAt <= currentTime {
-			log.Printf("%#q has expired...", top.(PQItem).Key)
-			data.Write(top.(PQItem).Key, nil)
+		value, ok := data.Read(top.(PQItem).Key)
+		if ok && value != nil && value.(*BulkString).ExpiresAt <= currentTime {
+			data.Delete(top.(PQItem).Key)
 		}
 	}
 }
 
-func ExecuteCommand(request *Array, data *SafeMap, expq *SafePriorityQueue) (string, error) {
+func ExecuteCommand(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
 	if request.Len < 1 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -65,7 +63,7 @@ func echo(request *Array) (string, error) {
 	return request.Value[1].(*BulkString).String(), nil
 }
 
-func set(request *Array, data *SafeMap, expq *SafePriorityQueue) (string, error) {
+func set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
 	if request.Len < 3 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -129,26 +127,23 @@ func set(request *Array, data *SafeMap, expq *SafePriorityQueue) (string, error)
 	return "+OK\r\n", nil
 }
 
-func get(request *Array, data *SafeMap) (string, error) {
+func get(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len != 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
 
 	key := request.Value[1].(*BulkString).Value
-	value := data.Read(key)
+	value, ok := data.Read(key)
 
-	if value == nil || value.(*BulkString).ExpiresAt <= time.Now().UnixMilli() {
-		if value != nil {
-			data.Write(key, nil)
-		}
-
+	if !ok || value == nil || value.(*BulkString).ExpiresAt <= time.Now().UnixMilli() {
+		data.Delete(key)
 		return "$-1\r\n", nil
 	}
 
 	return value.(*BulkString).String(), nil
 }
 
-func exists(request *Array, data *SafeMap) (string, error) {
+func exists(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len < 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -156,12 +151,12 @@ func exists(request *Array, data *SafeMap) (string, error) {
 	res := 0
 	for i := 1; i < request.Len; i++ {
 		key := request.Value[i].(*BulkString).Value
-		value := data.Read(key)
-		if value != nil {
-			if value.(*BulkString).ExpiresAt > time.Now().UnixMilli() {
-				res += 1
+		value, ok := data.Read(key)
+		if ok {
+			if value == nil || value.(*BulkString).ExpiresAt <= time.Now().UnixMilli() {
+				data.Delete(key)
 			} else {
-				data.Write(key, nil)
+				res += 1
 			}
 		}
 	}
@@ -169,7 +164,7 @@ func exists(request *Array, data *SafeMap) (string, error) {
 	return fmt.Sprintf(":%d\r\n", res), nil
 }
 
-func del(request *Array, data *SafeMap) (string, error) {
+func del(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len < 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -177,8 +172,10 @@ func del(request *Array, data *SafeMap) (string, error) {
 	res := 0
 	for i := 1; i < request.Len; i++ {
 		key := request.Value[i].(*BulkString).Value
-		data.Write(key, nil)
-		res += 1
+		if _, ok := data.Read(key); ok {
+			data.Delete(key)
+			res += 1
+		}
 	}
 
 	return fmt.Sprintf(":%d\r\n", res), nil
