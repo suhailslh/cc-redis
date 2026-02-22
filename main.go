@@ -138,13 +138,9 @@ func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], exp
 		case "HELLO","COMMAND","CONFIG":
 			response, err = "*2\r\n$5\r\nhello\r\n*1\r\n$5\r\nworld\r\n", nil
 		case "CLIENT":
-			response, err = "+OK\r\n", nil
-		case "WAIT":
-			response, err = ":0\r\n", nil
+	        	response, err = "+OK\r\n", nil
 		case "PING":
 			response, err = "+PONG\r\n", nil
-		case "ECHO":
-			response, err = resp.Echo(request)
 		case "SET":
 			response, err = resp.Set(request, data, expq)
 		case "GET":

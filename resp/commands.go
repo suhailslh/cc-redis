@@ -12,13 +12,6 @@ import (
 	"time"
 )
 
-func Echo(request *Array) (string, error) {
-	if request.Len != 2 {
-		return "", fmt.Errorf("Invalid Request %#q", request.String())
-	}
-	return request.Value[1].(*BulkString).String(), nil
-}
-
 func Set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
 	if request.Len < 3 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
