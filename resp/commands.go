@@ -83,15 +83,6 @@ func Set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueu
 	return "+OK\r\n", nil
 }
 
-func SetEx(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
-	request.Len = 5
-	request.Value[0] = &BulkString{Len: 3, Value: "SET"}
-	request.Value[2], request.Value[3] = request.Value[3], request.Value[2]
-	request.Value = append(request.Value, &BulkString{Len: 2, Value: "EX"})
-	request.Value[3], request.Value[4] = request.Value[4], request.Value[3]
-	return Set(request, data, expq)
-}
-
 func Get(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len != 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())

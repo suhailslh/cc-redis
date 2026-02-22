@@ -147,8 +147,6 @@ func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], exp
 			response, err = resp.Echo(request)
 		case "SET":
 			response, err = resp.Set(request, data, expq)
-		case "SETEX":
-			response, err = resp.SetEx(request, data, expq)
 		case "GET":
 			response, err = resp.Get(request, data)
 		case "EXISTS":
