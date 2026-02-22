@@ -135,7 +135,7 @@ func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], exp
 	var response string
 	var err error
 	switch command {
-		case "HELLO","COMMAND":
+		case "HELLO","COMMAND","CONFIG":
 			response, err = "*2\r\n$5\r\nhello\r\n*1\r\n$5\r\nworld\r\n", nil
 		case "CLIENT":
 			response, err = "+OK\r\n", nil
