@@ -120,12 +120,12 @@ func serve(conn net.Conn, data *resp.SafeMap[string, resp.DataType], expq *resp.
 			continue
 		}
 
-		execute(request, data, expq, topics, conn, subscriptions)
+		execute(request, data, expq, topics, subscriptions, conn)
 		request = resp.NewArray()
 	}
 }
 
-func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue, topics *resp.SafeMap[string, *resp.Topic], conn net.Conn, subscriptions *resp.SafeMap[string, int64]) {
+func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue, topics *resp.SafeMap[string, *resp.Topic], subscriptions *resp.SafeMap[string, int64], conn net.Conn) {
 	if request.Len < 1 {
 		log.Println(fmt.Errorf("Invalid Request %#q", request.String()))
 		return
