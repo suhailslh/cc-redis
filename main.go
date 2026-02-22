@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -42,11 +43,13 @@ func run(ready chan<- bool, interrupt <-chan os.Signal) int {
 
 	data := resp.NewSafeMap[string, resp.DataType]()
 	expq := resp.NewSafePriorityQueue()
+	topics := resp.NewSafeMap[string, *resp.Topic]()
+	subscriptions := resp.NewSafeMap[string, int64]()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	go func() {
 		for _ = range ticker.C {
-			resp.CollectGarbage(data, expq)
+			purge(data, expq)
 		}
 	}()
 
@@ -54,16 +57,18 @@ func run(ready chan<- bool, interrupt <-chan os.Signal) int {
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println(err)
-			break
+			if errors.Is(err, net.ErrClosed) {
+				break
+			}
 		}
 
-		go serve(conn, data, expq)
+		go serve(conn, data, expq, topics, subscriptions)
 	}
 
 	return 0
 }
 
-func serve(conn net.Conn, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue) {
+func serve(conn net.Conn, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue, topics *resp.SafeMap[string, *resp.Topic], subscriptions *resp.SafeMap[string, int64]) {
 	defer conn.Close()
 
 	request := resp.NewArray()
@@ -115,18 +120,72 @@ func serve(conn net.Conn, data *resp.SafeMap[string, resp.DataType], expq *resp.
 			continue
 		}
 
-		response, err := resp.ExecuteCommand(request, data, expq)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		_, err = conn.Write([]byte(response))
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
+		execute(request, data, expq, topics, conn, subscriptions)
 		request = resp.NewArray()
+	}
+}
+
+func execute(request *resp.Array, data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue, topics *resp.SafeMap[string, *resp.Topic], conn net.Conn, subscriptions *resp.SafeMap[string, int64]) {
+	if request.Len < 1 {
+		log.Println(fmt.Errorf("Invalid Request %#q", request.String()))
+		return
+	}
+
+	command := strings.ToUpper(request.Value[0].(*resp.BulkString).Value)
+	var response string
+	var err error
+	switch command {
+		case "HELLO","COMMAND":
+			response, err = "*2\r\n$5\r\nhello\r\n*1\r\n$5\r\nworld\r\n", nil
+		case "CLIENT":
+			response, err = "+OK\r\n", nil
+		case "WAIT":
+			response, err = ":0\r\n", nil
+		case "PING":
+			response, err = "+PONG\r\n", nil
+		case "ECHO":
+			response, err = resp.Echo(request)
+		case "SET":
+			response, err = resp.Set(request, data, expq)
+		case "SETEX":
+			response, err = resp.SetEx(request, data, expq)
+		case "GET":
+			response, err = resp.Get(request, data)
+		case "EXISTS":
+			response, err = resp.Exists(request, data)
+		case "DEL":
+			response, err = resp.Del(request, data)
+		case "SUBSCRIBE":
+			response, err = resp.Subscribe(request, topics, subscriptions, conn.RemoteAddr().String(), conn)
+		case "UNSUBSCRIBE":
+			response, err = resp.Unsubscribe(request, topics, subscriptions, conn.RemoteAddr().String(), conn)
+		case "PUBLISH":
+			response, err = resp.Publish(request, topics)
+	}
+
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	if response == "" {
+		return
+	}
+
+	_, err = conn.Write([]byte(response))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+}
+
+func purge(data *resp.SafeMap[string, resp.DataType], expq *resp.SafePriorityQueue) {
+	currentTime := time.Now().UnixMilli()
+	for top := expq.Peek(); top != nil && top.(resp.PQItem).Value <= currentTime; top = expq.Peek() {
+		expq.Pop()
+		value, ok := data.Read(top.(resp.PQItem).Key)
+		if ok && value != nil && value.(*resp.BulkString).ExpiresAt <= currentTime {
+			data.Delete(top.(resp.PQItem).Key)
+		}
 	}
 }

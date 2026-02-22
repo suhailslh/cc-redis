@@ -1,69 +1,25 @@
 package resp
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math"
-	"strings"
+	"net"
+	"slices"
 	"strconv"
 	"time"
 )
 
-func CollectGarbage(data *SafeMap[string, DataType], expq *SafePriorityQueue) {
-	currentTime := time.Now().UnixMilli()
-	for top := expq.Peek(); top != nil && top.(PQItem).Value <= currentTime; top = expq.Peek() {
-		expq.Pop()
-		value, ok := data.Read(top.(PQItem).Key)
-		if ok && value != nil && value.(*BulkString).ExpiresAt <= currentTime {
-			data.Delete(top.(PQItem).Key)
-		}
-	}
-}
-
-func ExecuteCommand(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
-	if request.Len < 1 {
-		return "", fmt.Errorf("Invalid Request %#q", request.String())
-	}
-
-	command := strings.ToUpper(request.Value[0].(*BulkString).Value)
-	switch command {
-		case "CLIENT":
-			return "+OK\r\n", nil
-		case "HELLO","COMMAND":
-			return "*2\r\n$5\r\nhello\r\n*1\r\n$5\r\nworld\r\n", nil
-		case "PING":
-			return "+PONG\r\n", nil
-		case "ECHO":
-			return echo(request)
-		case "SET":
-			return set(request, data, expq)
-		case "SETEX":
-			request.Len = 5
-			request.Value[0] = &BulkString{Len: 3, Value: "SET"}
-			request.Value[2], request.Value[3] = request.Value[3], request.Value[2]
-			request.Value = append(request.Value, &BulkString{Len: 2, Value: "EX"})
-			request.Value[3], request.Value[4] = request.Value[4], request.Value[3]
-			return set(request, data, expq)
-		case "GET":
-			return get(request, data)
-		case "EXISTS":
-			return exists(request, data)
-		case "DEL":
-			return del(request, data)
-		case "WAIT":
-			return ":0\r\n", nil
-	}
-
-	return request.String(), nil
-}
-
-func echo(request *Array) (string, error) {
+func Echo(request *Array) (string, error) {
 	if request.Len != 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
 	return request.Value[1].(*BulkString).String(), nil
 }
 
-func set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
+func Set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
 	if request.Len < 3 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -127,7 +83,16 @@ func set(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueu
 	return "+OK\r\n", nil
 }
 
-func get(request *Array, data *SafeMap[string, DataType]) (string, error) {
+func SetEx(request *Array, data *SafeMap[string, DataType], expq *SafePriorityQueue) (string, error) {
+	request.Len = 5
+	request.Value[0] = &BulkString{Len: 3, Value: "SET"}
+	request.Value[2], request.Value[3] = request.Value[3], request.Value[2]
+	request.Value = append(request.Value, &BulkString{Len: 2, Value: "EX"})
+	request.Value[3], request.Value[4] = request.Value[4], request.Value[3]
+	return Set(request, data, expq)
+}
+
+func Get(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len != 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -143,7 +108,7 @@ func get(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	return value.(*BulkString).String(), nil
 }
 
-func exists(request *Array, data *SafeMap[string, DataType]) (string, error) {
+func Exists(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len < 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -164,7 +129,7 @@ func exists(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	return fmt.Sprintf(":%d\r\n", res), nil
 }
 
-func del(request *Array, data *SafeMap[string, DataType]) (string, error) {
+func Del(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	if request.Len < 2 {
 		return "", fmt.Errorf("Invalid Request %#q", request.String())
 	}
@@ -179,4 +144,99 @@ func del(request *Array, data *SafeMap[string, DataType]) (string, error) {
 	}
 
 	return fmt.Sprintf(":%d\r\n", res), nil
+}
+
+func Subscribe(request *Array, topics *SafeMap[string, *Topic], subscriptions *SafeMap[string, int64], remoteAddr string, w io.Writer) (string, error) {
+	if request.Len < 2 {
+		return "", fmt.Errorf("Invalid Request %#q", request.String())
+	}
+
+	for i := 1; i < request.Len; i++ {
+		key := request.Value[i].(*BulkString).Value
+		topic, ok := topics.Read(key)
+		
+		if ok {
+			if !slices.Contains(topic.Subscribers, w) {
+				topic.Subscribers = append(topic.Subscribers, w)
+				subscriptionCount, _ := subscriptions.Read(remoteAddr)
+				subscriptions.Write(remoteAddr, subscriptionCount+1)
+			}
+		} else {
+			topic = NewTopic()
+			topic.Subscribers = append(topic.Subscribers, w)
+			
+			go func(topic *Topic) {
+				for message := range topic.Channel {
+					for i := len(topic.Subscribers)-1; i > -1; i-- {
+						subscriber := topic.Subscribers[i]
+						_, err := subscriber.Write([]byte(message.String()))
+						if err != nil {
+							log.Println(err)
+							if errors.Is(err, net.ErrClosed) {
+								topic.Subscribers = slices.Delete(topic.Subscribers, i, i+1)
+							}
+						}
+					}
+				}
+			}(topic)
+
+			topics.Write(key, topic)
+			subscriptionCount, _ := subscriptions.Read(remoteAddr)
+			subscriptions.Write(remoteAddr, subscriptionCount+1)
+		}
+
+		subscriptionCount, _ := subscriptions.Read(remoteAddr)
+		message := NewMessage("subscribe", key, NewIntegerWithValue(subscriptionCount))
+		_, err := w.Write([]byte(message.String()))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return "", nil
+}
+
+func Unsubscribe(request *Array, topics *SafeMap[string, *Topic], subscriptions *SafeMap[string, int64], remoteAddr string, w io.Writer) (string, error) {
+	if request.Len < 2 {
+		return "", fmt.Errorf("Invalid Request %#q", request.String())
+	}
+
+	for i := 1; i < request.Len; i++ {
+		key := request.Value[i].(*BulkString).Value
+		topic, ok := topics.Read(key)
+		index := slices.Index(topic.Subscribers, w)
+		
+		if ok && index != -1 {
+			topic.Subscribers = slices.Delete(topic.Subscribers, index, index+1)
+			subscriptionCount, _ := subscriptions.Read(remoteAddr)
+			subscriptions.Write(remoteAddr, subscriptionCount-1)
+		}
+
+		subscriptionCount, _ := subscriptions.Read(remoteAddr)
+		message := NewMessage("unsubscribe", key, NewIntegerWithValue(subscriptionCount))
+		_, err := w.Write([]byte(message.String()))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return "", nil
+}
+
+func Publish(request *Array, topics *SafeMap[string, *Topic]) (string, error) {
+	if request.Len != 3 {
+		return "", fmt.Errorf("Invalid Request %#q", request.String())
+	}
+
+	key := request.Value[1].(*BulkString).Value
+	topic, ok := topics.Read(key)
+	var subscriberCount int64 = 0
+
+	if ok {
+		subscriberCount = int64(len(topic.Subscribers))
+		message := NewMessage("message", key, request.Value[2])
+		topic.Channel <- message
+	}
+
+	return NewIntegerWithValue(subscriberCount).String(), nil
 }
